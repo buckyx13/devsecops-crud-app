@@ -1,0 +1,16 @@
+# .checkov.yaml - IaC security scanning config (Checkov).
+# Scans Dockerfiles and Kubernetes manifests for misconfigurations:
+# missing resource limits, containers running as root, missing
+# securityContext, privileged containers, host network/PID usage, etc.
+#
+# Run: checkov -d . --config-file .checkov.yaml
+framework:
+  - dockerfile
+  - kubernetes
+  - secrets
+quiet: true
+compact: true
+soft-fail: false   # fail the CI job on findings above the configured severity
+output: cli
+skip-check:
+  - CKV_K8S_21   # default namespace check - we use an explicit "crud-app" namespace, false positive guard

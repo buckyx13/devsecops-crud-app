@@ -1,0 +1,33 @@
+# In EKS, the AWS Load Balancer Controller watches this Ingress and
+# provisions an actual AWS Application Load Balancer (ALB) for it.
+# This is the "load balancer" tier when running in the cloud (replaces
+# the docker-compose nginx/ load balancer used for local study).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: crud-ingress
+  namespace: crud-app
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
+    # WAF can be attached here via alb.ingress.kubernetes.io/wafv2-acl-arn
+spec:
+  rules:
+    - http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: backend
+                port:
+                  number: 5000
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 80

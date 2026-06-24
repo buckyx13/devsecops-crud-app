@@ -1,0 +1,80 @@
+# docker-compose.yml - Local 3-tier study environment.
+# Tiers: nginx (load balancer) -> frontend (nginx static) -> backend (Node/Express) -> postgres (DB)
+# Run: docker compose up --build
+# Scale tiers to see load balancing in action:
+#   docker compose up --build --scale backend=3 --scale frontend=2
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: crud-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_ROOT_PASSWORD:-rootpass_change_me}
+      POSTGRES_DB: cruddb
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres-init/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - crud-net
+    ports:
+      - "5432:5432" # expose only for local study; remove in real deployments
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    image: crud-backend:local
+    restart: unless-stopped
+    environment:
+      PORT: 5000
+      PGHOST: postgres
+      PGPORT: 5432
+      PGUSER: appuser
+      PGPASSWORD: ${POSTGRES_APP_PASSWORD:-changeme_in_production}
+      PGDATABASE: cruddb
+      PGSSLMODE: disable
+      CORS_ORIGIN: http://localhost:8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - crud-net
+    expose:
+      - "5000"
+
+  frontend:
+    build: ./frontend
+    image: crud-frontend:local
+    restart: unless-stopped
+    depends_on:
+      - backend
+    networks:
+      - crud-net
+    expose:
+      - "8080"
+
+  loadbalancer:
+    build: ./nginx
+    image: crud-loadbalancer:local
+    container_name: crud-loadbalancer
+    restart: unless-stopped
+    depends_on:
+      - frontend
+      - backend
+    ports:
+      - "8080:80" # access the whole app at http://localhost:8080
+    networks:
+      - crud-net
+
+networks:
+  crud-net:
+    driver: bridge
+
+volumes:
+  postgres_data:

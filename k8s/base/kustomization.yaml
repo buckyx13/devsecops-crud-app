@@ -1,0 +1,18 @@
+# k8s/base/kustomization.yaml - groups all base manifests so they can be
+# applied as one unit (`kubectl apply -k k8s/base`) or referenced by
+# environment-specific overlays (see k8s/overlays/dev).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace.yaml
+  - postgres-secret.yaml
+  - postgres-statefulset.yaml
+  - backend-deployment.yaml
+  - frontend-deployment.yaml
+  - ingress.yaml
+  - network-policy.yaml
+
+commonLabels:
+  app.kubernetes.io/part-of: crud-app
+  app.kubernetes.io/managed-by: argocd

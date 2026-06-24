@@ -1,0 +1,14 @@
+# trivy.yaml - shared configuration for Trivy scans run in CI.
+# Trivy covers four DevSecOps "shift-left" needs in this project:
+#   1. Filesystem/dependency scan (SCA)      -> trivy fs .
+#   2. Container image scan                  -> trivy image <image>
+#   3. IaC misconfiguration scan (Dockerfiles, k8s YAML) -> trivy config .
+#   4. Secret scan (defense in depth alongside gitleaks)  -> trivy fs --scanners secret .
+#
+# Severity gate: builds fail the pipeline on CRITICAL/HIGH findings so that
+# vulnerable images never reach ECR / are blocked from deployment.
+severity: CRITICAL,HIGH
+exit-code: 1
+ignore-unfixed: true
+format: table
+timeout: 5m

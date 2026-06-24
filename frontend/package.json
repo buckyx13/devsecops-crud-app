@@ -1,0 +1,10 @@
+{
+  "name": "crud-frontend",
+  "version": "1.0.0",
+  "description": "Static frontend for 3-tier CRUD DevSecOps demo (vanilla JS, served by Nginx)",
+  "scripts": {
+    "build": "echo 'Static site - nothing to build' && exit 0",
+    "test": "echo 'No unit tests for static frontend' && exit 0"
+  },
+  "license": "MIT"
+}

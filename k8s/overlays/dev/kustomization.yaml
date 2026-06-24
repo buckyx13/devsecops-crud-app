@@ -1,0 +1,37 @@
+# k8s/overlays/dev/kustomization.yaml
+#
+# This overlay is what you'd point ArgoCD at for the cost-conscious "study
+# for 3 hours and tear down" use case described in the README: it reduces
+# replica counts to the minimum needed to still demonstrate load balancing,
+# which keeps the EKS node count (and therefore the AWS bill) as small as
+# possible while the architecture is still genuinely 3-tier and load balanced.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+patches:
+  - target:
+      kind: Deployment
+      name: backend
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 2
+  - target:
+      kind: Deployment
+      name: frontend
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 2
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: backend-hpa
+    patch: |-
+      - op: replace
+        path: /spec/maxReplicas
+        value: 3
+
+namePrefix: dev-

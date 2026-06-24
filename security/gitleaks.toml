@@ -1,0 +1,16 @@
+# gitleaks.toml - secret-scanning configuration.
+# Run in CI on every PR/push: gitleaks detect --source . --config security/gitleaks.toml --no-git=false
+# Blocks commits/PRs that introduce API keys, passwords, private keys, or
+# cloud credentials into the repository (a core DevSecOps "shift-left" control).
+
+title = "crud-app gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Files that are templates / examples only, never real secrets"
+paths = [
+  '''\.env\.example$''',
+  '''k8s/base/postgres-secret\.yaml$''',
+]

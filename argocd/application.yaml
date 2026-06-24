@@ -1,0 +1,46 @@
+# argocd/application.yaml
+#
+# This is the GitOps heart of the pipeline. ArgoCD continuously watches the
+# k8s/base directory in this Git repository and reconciles the live EKS
+# cluster state to match it. Jenkins (see jenkins/Jenkinsfile) never runs
+# `kubectl apply` directly — it only commits an updated image tag to this
+# repo. ArgoCD detects the commit and performs the actual deployment.
+# This means: (1) git history is a complete audit log of every deployment,
+# (2) the cluster can never silently drift from what's declared in git,
+# because ArgoCD's self-heal will revert manual kubectl changes, and
+# (3) rolling back a bad deploy is just `git revert` + ArgoCD re-syncing.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: crud-app
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/<your-org>/devsecops-crud-app.git
+    targetRevision: main
+    path: k8s/base
+    # If you prefer Kustomize overlays (k8s/overlays/dev), change `path` to
+    # k8s/overlays/dev and ArgoCD will auto-detect the kustomization.yaml.
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: crud-app
+
+  syncPolicy:
+    automated:
+      prune: true     # remove resources that are deleted from git
+      selfHeal: true  # revert any manual kubectl changes back to git state
+    syncOptions:
+      - CreateNamespace=false # namespace.yaml in k8s/base already creates it
+      - PrunePropagationPolicy=foreground
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 2m

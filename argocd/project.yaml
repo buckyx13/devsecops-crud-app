@@ -1,0 +1,25 @@
+# argocd/project.yaml
+# An ArgoCD AppProject scopes what an Application is allowed to do:
+# which repos it may sync from, which clusters/namespaces it may deploy
+# to, and which Kubernetes resource kinds it may create. This is the
+# least-privilege principle applied to the GitOps controller itself, so a
+# compromised or misconfigured Application manifest can't deploy arbitrary
+# resources cluster-wide.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: crud-app-project
+  namespace: argocd
+spec:
+  description: DevSecOps study project - 3-tier CRUD app
+  sourceRepos:
+    - https://github.com/<your-org>/devsecops-crud-app.git
+  destinations:
+    - namespace: crud-app
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist:
+    - group: ''
+      kind: Namespace
+  namespaceResourceWhitelist:
+    - group: '*'
+      kind: '*'

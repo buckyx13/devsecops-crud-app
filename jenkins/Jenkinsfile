@@ -1,0 +1,142 @@
+// jenkins/Jenkinsfile
+//
+// This pipeline runs AFTER GitHub Actions CI has already passed on `main`
+// (see .github/workflows/ci-cd.yml). Its job is the heavier orchestration:
+// build production images, scan them again as a final gate, push to ECR,
+// update the Kubernetes manifests with the new image tag, and let ArgoCD
+// pick up the change via GitOps (Jenkins does NOT kubectl apply directly;
+// see argocd/application.yaml for why).
+//
+// Required Jenkins configuration (see README.md "Jenkins setup" section):
+//   - AWS credentials bound to an IAM role/user with ECR push permissions
+//   - "amazon-ecr" credential ID configured in Jenkins Credentials store
+//   - A "git-deploy-key" credential with push access to this repo (so the
+//     pipeline can commit the new image tag into k8s manifests for ArgoCD)
+//   - Trivy installed on the Jenkins agent (or use the Docker-based trivy image)
+
+pipeline {
+    agent any
+
+    environment {
+        AWS_REGION       = 'ap-south-1'
+        ECR_REGISTRY     = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+        BACKEND_IMAGE    = "${ECR_REGISTRY}/crud-backend"
+        FRONTEND_IMAGE   = "${ECR_REGISTRY}/crud-frontend"
+        IMAGE_TAG        = "${env.GIT_COMMIT.take(7)}"
+    }
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Login to ECR') {
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'amazon-ecr']]) {
+                    sh '''
+                        aws ecr get-login-password --region "$AWS_REGION" | \
+                        docker login --username AWS --password-stdin "$ECR_REGISTRY"
+                    '''
+                }
+            }
+        }
+
+        stage('Build images') {
+            parallel {
+                stage('Backend image') {
+                    steps {
+                        sh "docker build -t ${BACKEND_IMAGE}:${IMAGE_TAG} -f backend/Dockerfile backend"
+                    }
+                }
+                stage('Frontend image') {
+                    steps {
+                        sh "docker build -t ${FRONTEND_IMAGE}:${IMAGE_TAG} -f frontend/Dockerfile frontend"
+                    }
+                }
+            }
+        }
+
+        stage('Trivy image scan (gate)') {
+            // This is the final security gate before anything reaches ECR.
+            // A CRITICAL/HIGH finding fails the build and nothing is pushed.
+            parallel {
+                stage('Scan backend') {
+                    steps {
+                        sh """
+                            trivy image --severity CRITICAL,HIGH --exit-code 1 \
+                              --ignore-unfixed ${BACKEND_IMAGE}:${IMAGE_TAG}
+                        """
+                    }
+                }
+                stage('Scan frontend') {
+                    steps {
+                        sh """
+                            trivy image --severity CRITICAL,HIGH --exit-code 1 \
+                              --ignore-unfixed ${FRONTEND_IMAGE}:${IMAGE_TAG}
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Push to ECR') {
+            steps {
+                sh """
+                    docker push ${BACKEND_IMAGE}:${IMAGE_TAG}
+                    docker push ${FRONTEND_IMAGE}:${IMAGE_TAG}
+                """
+            }
+        }
+
+        stage('Update manifests for GitOps (ArgoCD)') {
+            // We do NOT kubectl apply here. ArgoCD watches this repo and
+            // syncs automatically once the manifest's image tag changes.
+            // This keeps a single source of truth (git) for cluster state.
+            steps {
+                withCredentials([sshUserPrivateKey(credentialsId: 'git-deploy-key', keyFileVariable: 'SSH_KEY')]) {
+                    sh '''
+                        export GIT_SSH_COMMAND="ssh -i $SSH_KEY -o StrictHostKeyChecking=no"
+                        sed -i "s#image: .*crud-backend:.*#image: ${BACKEND_IMAGE}:${IMAGE_TAG}#" k8s/base/backend-deployment.yaml
+                        sed -i "s#image: .*crud-frontend:.*#image: ${FRONTEND_IMAGE}:${IMAGE_TAG}#" k8s/base/frontend-deployment.yaml
+                        git config user.email "jenkins-ci@example.com"
+                        git config user.name "jenkins-ci"
+                        git add k8s/base/backend-deployment.yaml k8s/base/frontend-deployment.yaml
+                        git commit -m "ci: bump images to ${IMAGE_TAG} [skip ci]" || echo "No changes to commit"
+                        git push origin HEAD:main
+                    '''
+                }
+            }
+        }
+
+        stage('DAST - OWASP ZAP baseline (staging)') {
+            steps {
+                sh '''
+                    docker run --rm -v $(pwd)/security/zap:/zap/wrk owasp/zap2docker-stable \
+                      zap-baseline.py -t https://staging.crud-app.example.com \
+                      -c /zap/wrk/zap-rules.tsv -r zap-report.html || true
+                '''
+                archiveArtifacts artifacts: 'zap-report.html', allowEmptyArchive: true
+            }
+        }
+    }
+
+    post {
+        always {
+            sh 'docker logout "$ECR_REGISTRY" || true'
+        }
+        success {
+            echo "Pipeline succeeded. ArgoCD will sync image tag ${IMAGE_TAG} into EKS shortly."
+        }
+        failure {
+            echo "Pipeline failed - no image was promoted to the cluster."
+        }
+    }
+}

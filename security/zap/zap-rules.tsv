@@ -1,0 +1,11 @@
+# zap-rules.tsv - OWASP ZAP baseline scan rule overrides.
+# Format: <rule-id>	<action: IGNORE|WARN|FAIL>	<description-comment>
+# Used by: docker run -t owasp/zap2docker-stable zap-baseline.py -t <url> -c zap-rules.tsv
+#
+# This is run as a DAST (Dynamic Application Security Testing) step against
+# the deployed frontend/backend in a staging environment, ideally after
+# every deploy to a non-prod EKS namespace, before promoting to prod.
+
+10202	IGNORE	Absence of Anti-CSRF Tokens - acceptable for this read/write demo API; would FAIL in a real prod gate
+10096	WARN	Timestamp Disclosure - low risk informational finding
+10027	WARN	Information Disclosure - Suspicious Comments

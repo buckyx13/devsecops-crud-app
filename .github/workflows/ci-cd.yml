@@ -1,0 +1,171 @@
+# .github/workflows/ci-cd.yml
+#
+# This is the "CI" half of the pipeline: fast feedback on every pull request
+# and push. It does NOT deploy anything — that is Jenkins' job (see
+# jenkins/Jenkinsfile) once code lands on main. Splitting the two tools is
+# intentional for this study project: it shows how GitHub Actions and
+# Jenkins can be combined, which is a common real-world DevSecOps setup
+# (GitHub Actions for fast PR gates, Jenkins for build/deploy orchestration
+# with more complex credential/plugin needs).
+name: CI - Lint, Test, and Security Scan
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write # required for CodeQL to upload SARIF results
+
+jobs:
+  backend-test:
+    name: Backend lint + unit/integration tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: appuser
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: cruddb_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U appuser"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Lint
+        working-directory: backend
+        run: npm run lint
+
+      - name: Run tests against Postgres service container
+        working-directory: backend
+        env:
+          PGHOST: localhost
+          PGPORT: 5432
+          PGUSER: appuser
+          PGPASSWORD: testpass
+          PGDATABASE: cruddb_test
+        run: npm test
+
+  sca-and-secrets:
+    name: Dependency audit + secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history needed for thorough secret scanning
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: npm audit (backend)
+        working-directory: backend
+        run: npm audit --audit-level=high
+        continue-on-error: true # report findings without blocking the demo pipeline; flip to false for strict gating
+
+      - name: Gitleaks secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          config-path: security/gitleaks.toml
+
+  iac-scan:
+    name: IaC misconfiguration scan (Checkov)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Checkov
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: .
+          config_file: security/.checkov.yaml
+          quiet: true
+
+  codeql:
+    name: CodeQL SAST
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+
+  trivy-fs-scan:
+    name: Trivy filesystem/dependency scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
+          ignore-unfixed: true
+
+  build-images:
+    name: Build Docker images (validation only, no push)
+    runs-on: ubuntu-latest
+    needs: [backend-test, sca-and-secrets, iac-scan, trivy-fs-scan]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build backend image
+        run: docker build -t crud-backend:ci -f backend/Dockerfile backend
+
+      - name: Build frontend image
+        run: docker build -t crud-frontend:ci -f frontend/Dockerfile frontend
+
+      - name: Build loadbalancer image
+        run: docker build -t crud-loadbalancer:ci -f nginx/Dockerfile nginx
+
+      - name: Scan backend image with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'crud-backend:ci'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
+          ignore-unfixed: true
+
+      - name: Scan frontend image with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'crud-frontend:ci'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
+          ignore-unfixed: true
+
+# NOTE: Pushing to ECR and deploying via ArgoCD happens in Jenkins
+# (jenkins/Jenkinsfile), triggered after this workflow succeeds on `main`.
+# This keeps fast PR feedback (here) separate from slower build/push/deploy
+# orchestration (Jenkins), which is a deliberate architectural choice for
+# this study project to demonstrate both tools in one pipeline.

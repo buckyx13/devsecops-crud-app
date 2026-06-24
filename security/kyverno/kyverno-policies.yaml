@@ -1,0 +1,125 @@
+# kyverno-policies.yaml - runtime admission-control security gate.
+# Kyverno is installed cluster-wide (helm install kyverno kyverno/kyverno -n kyverno --create-namespace)
+# and these ClusterPolicies are applied on top. They block insecure pod specs
+# from ever being scheduled, regardless of what CI already checked --
+# defense in depth ("shift right" complementing the "shift left" scans in CI).
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-non-root
+  annotations:
+    policies.kyverno.io/title: Require Non-Root Containers
+    policies.kyverno.io/category: Pod Security Standards (Restricted)
+    policies.kyverno.io/description: >-
+      Blocks any pod in the crud-app namespace that does not explicitly set
+      runAsNonRoot: true, preventing containers from running as root even if
+      a Dockerfile/image is later changed to default to root.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: check-runAsNonRoot
+      match:
+        any:
+          - resources:
+              kinds: ["Pod"]
+              namespaces: ["crud-app"]
+      validate:
+        message: "Containers must set securityContext.runAsNonRoot=true"
+        pattern:
+          spec:
+            =(securityContext):
+              runAsNonRoot: true
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-privileged-and-capabilities
+  annotations:
+    policies.kyverno.io/title: Disallow Privileged Containers
+    policies.kyverno.io/category: Pod Security Standards (Restricted)
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: privileged-containers
+      match:
+        any:
+          - resources:
+              kinds: ["Pod"]
+              namespaces: ["crud-app"]
+      validate:
+        message: "Privileged containers are not allowed"
+        pattern:
+          spec:
+            containers:
+              - =(securityContext):
+                  =(privileged): "false"
+    - name: drop-all-capabilities
+      match:
+        any:
+          - resources:
+              kinds: ["Pod"]
+              namespaces: ["crud-app"]
+      validate:
+        message: "Containers must drop ALL Linux capabilities"
+        pattern:
+          spec:
+            containers:
+              - securityContext:
+                  capabilities:
+                    drop: ["ALL"]
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-resource-limits
+  annotations:
+    policies.kyverno.io/title: Require CPU/Memory Limits
+    policies.kyverno.io/category: Best Practices
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: validate-resources
+      match:
+        any:
+          - resources:
+              kinds: ["Pod"]
+              namespaces: ["crud-app"]
+      validate:
+        message: "CPU and memory requests/limits are required on every container"
+        pattern:
+          spec:
+            containers:
+              - resources:
+                  requests:
+                    cpu: "?*"
+                    memory: "?*"
+                  limits:
+                    cpu: "?*"
+                    memory: "?*"
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-latest-tag
+  annotations:
+    policies.kyverno.io/title: Disallow ':latest' Image Tag
+    policies.kyverno.io/category: Best Practices
+spec:
+  validationFailureAction: Audit   # set to Enforce once CI always injects a git-sha tag
+  background: true
+  rules:
+    - name: require-image-tag
+      match:
+        any:
+          - resources:
+              kinds: ["Pod"]
+              namespaces: ["crud-app"]
+      validate:
+        message: "Images must be pinned to an immutable tag (e.g. git SHA), not ':latest'"
+        pattern:
+          spec:
+            containers:
+              - image: "!*:latest"
